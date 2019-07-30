@@ -195,6 +195,7 @@ my $curfunc;
 # Functions to omit
 my @omit = ();
 my $include_external = 0;
+my @functions = ();
 
 # Mapping from symbol reference types to dot styles
 my $styles = {
@@ -210,8 +211,9 @@ sub demangle {
     return $name;
 }
 
-GetOptions('omit=s' => \@omit,
-	   'include-external' => \$include_external);
+GetOptions('omit=s'           => \@omit,
+           'include-external' => \$include_external,
+           'function=s'       => \@functions);
 
 @omit = split(/,/, join(',', @omit));
 
@@ -247,30 +249,54 @@ my %omit_map;
 
 my %unconnected = map { ($_, undef) } keys %{$calls};
 
+
 print "digraph callgraph {\n";
 
-foreach my $caller (keys %{$calls}) {
-    my $caller_d = demangle($caller);
-    foreach my $callee (keys %{$calls->{$caller}}) {
-	my $reftype = $calls->{$caller}->{$callee};
-	# ARM short calls are flagged with a caret prefix; ignore it
-	$callee =~ s/^\^+//;
-	# If the referenced symbol is not a defined function
-	# or a direct call to an external function, ignore it.
-	next unless exists($calls->{$callee}) or
-	    $include_external and $reftype eq 'call'
-	        and ! exists $omit_map{$callee};
-	my $style = $styles->{$reftype};
-	my $callee_d = demangle($callee);
-	print "\"$caller_d\" -> \"$callee_d\" [style=$style];\n";
-	delete $unconnected{$caller};
-	delete $unconnected{$callee};
-    }
-}
+if ( @functions ) {
+	foreach my $func (@functions) {
+		graph_recursive($func);
+	}
+} else {
+	foreach my $caller (keys %{$calls}) {
+		my $caller_d = demangle($caller);
+		foreach my $callee (keys %{$calls->{$caller}}) {
+			my $reftype = $calls->{$caller}->{$callee};
+			# ARM short calls are flagged with a caret prefix; ignore it
+			$callee =~ s/^\^+//;
+			# If the referenced symbol is not a defined function
+			# or a direct call to an external function, ignore it.
+			next unless exists($calls->{$callee}) or
+				$include_external and $reftype eq 'call'
+				and ! exists $omit_map{$callee};
+			my $style = $styles->{$reftype};
+			my $callee_d = demangle($callee);
+			print "\"$caller_d\" -> \"$callee_d\" [style=$style];\n";
+			delete $unconnected{$caller};
+			delete $unconnected{$callee};
+		}
+	}
 
-foreach my $f (keys %unconnected) {
-    my $f_d = demangle($f);
-    print "\"$f_d\";\n";
+	foreach my $f (keys %unconnected) {
+		my $f_d = demangle($f);
+		print "\"$f_d\";\n";
+	}
 }
 
 print "}\n";
+
+my %recursive_handled;
+
+sub graph_recursive {
+	my ($func) = @_;
+	return unless exists $calls->{$func};
+	return if exists $recursive_handled{$func};
+
+	$recursive_handled{$func} = 1;
+	foreach my $called ( keys %{$calls->{$func}} ) {
+		print "\"$func\" -> \"$called\";\n";
+	}
+
+	foreach my $called ( keys %{$calls->{$func}} ) {
+		graph_recursive($called);
+	}
+}
